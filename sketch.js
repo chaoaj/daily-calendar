@@ -13,19 +13,37 @@ let draggingPiece = null;
 let dragOffset = { x: 0, y: 0 };
 let resetButton = null;
 let solveButton = null;
+let hint1Button = null;
+let hint2Button = null;
+let hint3Button = null;
+let dateModeSelect = null;
+let dateInput = null;
+let dateLabel = null;
 
 let validCells = new Set();
 let cellLabels = new Map();
 let holeCells = new Set();
 let monthCellByIndex = [];
 let dayCellByNumber = [];
-let todayLabel = '';
+let activeDate = null;
+let activeDateLabel = '';
 
 let confetti = [];
 let confettiFrames = 0;
 let solvedState = false;
 
 const CONFETTI_DURATION = 220;
+
+const PIECE_SHADING = [
+  { hi: 150, sh: 120, grain: 42, mode: 'angled', tilt: -8 },
+  { hi: 135, sh: 128, grain: 50, mode: 'flat', tilt: 0 },
+  { hi: 165, sh: 115, grain: 36, mode: 'angled', tilt: 7 },
+  { hi: 120, sh: 140, grain: 54, mode: 'flat', tilt: 0 },
+  { hi: 145, sh: 125, grain: 46, mode: 'angled', tilt: 9 },
+  { hi: 130, sh: 145, grain: 58, mode: 'flat', tilt: 0 },
+  { hi: 170, sh: 112, grain: 34, mode: 'angled', tilt: -7 },
+  { hi: 125, sh: 150, grain: 62, mode: 'flat', tilt: 0 }
+];
 
 const MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -35,13 +53,48 @@ const MONTHS = [
 function setup() {
   createCanvas(920, 620);
   textFont('sans-serif');
+  activeDate = new Date();
   initBoard();
   initPieces();
+
+  dateLabel = createDiv('Puzzle Date');
+  dateLabel.position(650, 18);
+  dateLabel.style('font-size', '12px');
+  dateLabel.style('font-family', 'sans-serif');
+  dateLabel.style('color', '#4a3523');
+
+  dateModeSelect = createSelect();
+  dateModeSelect.position(650, 42);
+  dateModeSelect.option('Today', 'today');
+  dateModeSelect.option('Custom', 'custom');
+  dateModeSelect.selected('today');
+  dateModeSelect.changed(handleDateModeChange);
+
+  dateInput = createInput(formatDateInputValue(activeDate), 'date');
+  dateInput.position(728, 42);
+  dateInput.size(160);
+  dateInput.attribute('max', '9999-12-31');
+  dateInput.input(handleDateInputChange);
+  dateInput.hide();
+
   resetButton = createButton('Reset');
   resetButton.position(24, 72);
   resetButton.mousePressed(resetPuzzle);
+
+  hint1Button = createButton('Hint 1: Orient Pieces');
+  hint1Button.position(90, 72);
+  hint1Button.mousePressed(handleHint1);
+
+  hint2Button = createButton('Hint 2: Place 1 Per Window');
+  hint2Button.position(230, 72);
+  hint2Button.mousePressed(handleHint2);
+
+  hint3Button = createButton('Hint 3: Place Around Holes');
+  hint3Button.position(430, 72);
+  hint3Button.mousePressed(handleHint3);
+
   solveButton = createButton('Give Up / Solution');
-  solveButton.position(90, 72);
+  solveButton.position(620, 72);
   solveButton.mousePressed(handleSolve);
 }
 
@@ -86,14 +139,71 @@ function initBoard() {
     }
   }
 
-  const today = new Date();
-  const monthIndex = today.getMonth();
-  const dayNumber = today.getDate();
+  const monthIndex = activeDate.getMonth();
+  const dayNumber = activeDate.getDate();
   const monthCell = monthCellByIndex[monthIndex];
   const dayCell = dayCellByNumber[dayNumber];
   holeCells.add(cellKey(monthCell.row, monthCell.col));
   holeCells.add(cellKey(dayCell.row, dayCell.col));
-  todayLabel = `${MONTHS[monthIndex]} ${dayNumber}`;
+  activeDateLabel = `${MONTHS[monthIndex]} ${dayNumber}`;
+}
+
+function formatDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateInputValue(value) {
+  const parts = value.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  const [year, month, day] = parts;
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function handleDateModeChange() {
+  const mode = dateModeSelect.value();
+  if (mode === 'today') {
+    activeDate = new Date();
+    dateInput.value(formatDateInputValue(activeDate));
+    dateInput.hide();
+    resetPuzzle();
+    return;
+  }
+
+  dateInput.show();
+  const parsed = parseDateInputValue(dateInput.value());
+  if (parsed) {
+    activeDate = parsed;
+    resetPuzzle();
+  }
+}
+
+function handleDateInputChange() {
+  if (!dateModeSelect || dateModeSelect.value() !== 'custom') {
+    return;
+  }
+
+  const parsed = parseDateInputValue(dateInput.value());
+  if (!parsed) {
+    return;
+  }
+
+  activeDate = parsed;
+  resetPuzzle();
 }
 
 function initPieces() {
@@ -120,16 +230,18 @@ function initPieces() {
   ];
 
   const colors = [
-    '#d9896f', '#d6a76b', '#c9b65f', '#8db17d',
-    '#6fb0aa', '#7ea2d6', '#b492d1', '#d49bb3'
+    '#dcb78e', '#d4ab7f', '#e1bf98', '#cda072',
+    '#d9b388', '#c8996d', '#e0c39e', '#c18f62'
   ];
 
   pieces = shapes.map((shape, index) => ({
     name: shape.name,
+    number: index + 1,
     blocks: shape.blocks,
     orientations: getUniqueOrientations(shape.blocks),
     pos: { ...startPositions[index] },
     color: colors[index],
+    shade: PIECE_SHADING[index % PIECE_SHADING.length],
     rotation: 0,
     flipped: false,
     placed: false,
@@ -209,15 +321,88 @@ function drawPieces() {
   for (const piece of pieces) {
     const blocks = getTransformedBlocks(piece);
     const isSelected = piece === selectedPiece;
-    stroke(isSelected ? 40 : 120);
-    strokeWeight(isSelected ? 2 : 1);
-    fill(piece.color);
+    let averageCenterX = 0;
+    let averageCenterY = 0;
 
     for (const block of blocks) {
       const x = piece.pos.x + block.x * CELL;
       const y = piece.pos.y + block.y * CELL;
+      averageCenterX += x + CELL / 2;
+      averageCenterY += y + CELL / 2;
+
+      stroke(isSelected ? color(70, 50, 32) : color(108, 80, 56));
+      const outlineWeight = isSelected ? 3.2 : solvedState ? 2.4 : 1.7;
+      strokeWeight(outlineWeight);
+      fill(piece.color);
       rect(x, y, CELL, CELL, 6);
+
+      // Piece-specific highlight/shadow and grain so each wood block reads differently.
+      stroke(245, 225, 198, piece.shade.hi);
+      strokeWeight(1);
+      line(x + 3, y + 3, x + CELL - 4, y + 3);
+      line(x + 3, y + 3, x + 3, y + CELL - 4);
+
+      stroke(98, 72, 50, piece.shade.sh);
+      line(x + 2, y + CELL - 3, x + CELL - 3, y + CELL - 3);
+      line(x + CELL - 3, y + 2, x + CELL - 3, y + CELL - 3);
+
+      stroke(112, 82, 54, piece.shade.grain);
+      const grainTilt = piece.shade.mode === 'angled' ? piece.shade.tilt : 0;
+      line(x + 6, y + 10, x + CELL - 7, y + 10 + grainTilt);
+      line(x + 6, y + 19, x + CELL - 7, y + 19 + grainTilt);
+      line(x + 6, y + 28, x + CELL - 7, y + 28 + grainTilt);
+      line(x + 6, y + 34, x + CELL - 7, y + 34 + grainTilt);
     }
+
+    averageCenterX /= blocks.length;
+    averageCenterY /= blocks.length;
+
+    let labelBlockCenterX = averageCenterX;
+    let labelBlockCenterY = averageCenterY;
+    let bestNeighborScore = -1;
+    let bestAxisScore = -1;
+    let bestDistance = Infinity;
+    const blockKeys = new Set(blocks.map((block) => `${block.x},${block.y}`));
+
+    for (const block of blocks) {
+      const blockCenterX = piece.pos.x + block.x * CELL + CELL / 2;
+      const blockCenterY = piece.pos.y + block.y * CELL + CELL / 2;
+      const distance = dist(blockCenterX, blockCenterY, averageCenterX, averageCenterY);
+
+      const hasLeft = blockKeys.has(`${block.x - 1},${block.y}`);
+      const hasRight = blockKeys.has(`${block.x + 1},${block.y}`);
+      const hasUp = blockKeys.has(`${block.x},${block.y - 1}`);
+      const hasDown = blockKeys.has(`${block.x},${block.y + 1}`);
+      const neighborScore = Number(hasLeft) + Number(hasRight) + Number(hasUp) + Number(hasDown);
+      const axisScore = Number(hasLeft || hasRight) + Number(hasUp || hasDown);
+
+      if (
+        neighborScore > bestNeighborScore ||
+        (neighborScore === bestNeighborScore && axisScore > bestAxisScore) ||
+        (neighborScore === bestNeighborScore && axisScore === bestAxisScore && distance < bestDistance)
+      ) {
+        bestNeighborScore = neighborScore;
+        bestAxisScore = axisScore;
+        bestDistance = distance;
+        labelBlockCenterX = blockCenterX;
+        labelBlockCenterY = blockCenterY;
+      }
+    }
+
+    // Burned-in piece number for fast visual differentiation.
+    noStroke();
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    textStyle(BOLD);
+
+    fill(58, 34, 18, 90);
+    text(piece.number, labelBlockCenterX + 1.2, labelBlockCenterY + 1.4);
+
+    fill(74, 44, 24, 170);
+    text(piece.number, labelBlockCenterX, labelBlockCenterY);
+
+    fill(122, 84, 54, 55);
+    text(piece.number, labelBlockCenterX - 0.8, labelBlockCenterY - 0.9);
   }
 }
 
@@ -228,7 +413,7 @@ function drawHUD() {
   textSize(14);
   text('Drag pieces. R = rotate, F = flip. Drag off board to remove.', 24, 24);
   textSize(12);
-  text(`Today: ${todayLabel}`, 24, 48);
+  text(`Date: ${activeDateLabel}`, 24, 48);
   if (solvedState) {
     fill(36, 122, 70);
     textSize(16);
@@ -535,6 +720,171 @@ function handleSolve() {
     return;
   }
   applySolution(solution);
+}
+
+function handleHint1() {
+  const solution = solvePuzzle();
+  if (!solution) {
+    window.alert('No solution found for this date.');
+    return;
+  }
+
+  selectedPiece = null;
+  draggingPiece = null;
+
+  // Hint 1: only apply final orientation (rotation + flip), do not move pieces.
+  for (let i = 0; i < pieces.length; i++) {
+    const placement = solution[i];
+    if (!placement) {
+      continue;
+    }
+
+    const piece = pieces[i];
+    piece.rotation = placement.rotation;
+    piece.flipped = placement.flipped;
+
+    if (piece.placed && !isPlacementValid(piece, piece.gridPos)) {
+      piece.placed = false;
+      piece.gridPos = null;
+      piece.lastPlaced = null;
+    } else if (piece.placed) {
+      placePiece(piece, piece.gridPos);
+    }
+  }
+}
+
+function handleHint2() {
+  const solution = solvePuzzle();
+  if (!solution) {
+    window.alert('No solution found for this date.');
+    return;
+  }
+
+  selectedPiece = null;
+  draggingPiece = null;
+
+  const holeList = getHoleCells();
+  const selectedIndices = new Set();
+
+  // Hint 2: place one solved piece around each opening (max 2 unique pieces).
+  for (const hole of holeList) {
+    const touching = [];
+    for (let i = 0; i < pieces.length; i++) {
+      const placement = solution[i];
+      if (!placement) {
+        continue;
+      }
+      const piece = pieces[i];
+      const score = placementTouchScore(piece, placement, hole);
+      if (score > 0) {
+        touching.push({ index: i, score });
+      }
+    }
+
+    touching.sort((a, b) => b.score - a.score || a.index - b.index);
+
+    let added = 0;
+    for (const item of touching) {
+      if (selectedIndices.has(item.index)) {
+        continue;
+      }
+      selectedIndices.add(item.index);
+      added += 1;
+      if (added === 1) {
+        break;
+      }
+    }
+  }
+
+  for (const idx of selectedIndices) {
+    const placement = solution[idx];
+    const piece = pieces[idx];
+    piece.rotation = placement.rotation;
+    piece.flipped = placement.flipped;
+    placePiece(piece, placement.gridPos);
+  }
+}
+
+function handleHint3() {
+  const solution = solvePuzzle();
+  if (!solution) {
+    window.alert('No solution found for this date.');
+    return;
+  }
+
+  selectedPiece = null;
+  draggingPiece = null;
+
+  // Hint 3: place all solved pieces that touch either hidden opening cell.
+  for (let i = 0; i < pieces.length; i++) {
+    const placement = solution[i];
+    if (!placement) {
+      continue;
+    }
+
+    const piece = pieces[i];
+    if (!placementTouchesHole(piece, placement)) {
+      continue;
+    }
+
+    piece.rotation = placement.rotation;
+    piece.flipped = placement.flipped;
+    placePiece(piece, placement.gridPos);
+  }
+}
+
+function getHoleCells() {
+  return Array.from(holeCells).map((key) => {
+    const [row, col] = key.split(',').map(Number);
+    return { row, col, key };
+  });
+}
+
+function placementTouchScore(piece, placement, hole) {
+  const blocks = getBlocksForState(piece.blocks, placement.rotation, placement.flipped);
+  let score = 0;
+
+  for (const block of blocks) {
+    const row = placement.gridPos.y + block.y;
+    const col = placement.gridPos.x + block.x;
+    const manhattan = Math.abs(row - hole.row) + Math.abs(col - hole.col);
+    if (manhattan === 1) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
+function placementTouchesHole(piece, placement) {
+  const blocks = getBlocksForState(piece.blocks, placement.rotation, placement.flipped);
+
+  for (const block of blocks) {
+    const row = placement.gridPos.y + block.y;
+    const col = placement.gridPos.x + block.x;
+
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const neighborKey = cellKey(row + dr, col + dc);
+      if (holeCells.has(neighborKey)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getBlocksForState(rawBlocks, rotation, flipped) {
+  let blocks = rawBlocks.map(([x, y]) => ({ x, y }));
+
+  if (flipped) {
+    blocks = blocks.map((b) => ({ x: -b.x, y: b.y }));
+  }
+
+  for (let i = 0; i < rotation; i++) {
+    blocks = blocks.map((b) => ({ x: -b.y, y: b.x }));
+  }
+
+  return normalizeBlocks(blocks);
 }
 
 function solvePuzzle() {
