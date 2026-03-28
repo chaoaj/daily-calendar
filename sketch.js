@@ -33,7 +33,6 @@ let confettiFrames = 0;
 let solvedState = false;
 
 const CONFETTI_DURATION = 220;
-
 const PIECE_SHADING = [
   { hi: 150, sh: 120, grain: 42, mode: 'angled', tilt: -8 },
   { hi: 135, sh: 128, grain: 50, mode: 'flat', tilt: 0 },
@@ -208,25 +207,26 @@ function handleDateInputChange() {
 
 function initPieces() {
   const shapes = [
-    { name: 'L', blocks: [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2]] },
-    { name: 'T', blocks: [[0, 0], [1, 0], [2, 0], [1, 1], [1, 2]] },
-    { name: 'Z', blocks: [[0, 0], [1, 0], [1, 1], [2, 1], [3, 1]] },
-    { name: 'P', blocks: [[0, 0], [1, 0], [0, 1], [1, 1], [0, 2]] },
-    { name: 'U', blocks: [[0, 0], [2, 0], [0, 1], [1, 1], [2, 1]] },
-    { name: 'W', blocks: [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2]] },
-    { name: 'Y', blocks: [[0, 0], [0, 1], [0, 2], [0, 3], [1, 1]] },
+    // Piece silhouettes are oriented to match the physical layout shown in the reference photo.
+    { name: 'TopL', blocks: [[0, 0], [1, 0], [2, 0], [3, 0], [0, 1]] },
+    { name: 'TopStem', blocks: [[0, 0], [1, 0], [2, 0], [3, 0], [2, 1]] },
+    { name: 'TopCorner', blocks: [[0, 0], [1, 0], [1, 1], [1, 2], [2, 2]] },
+    { name: 'LeftStem', blocks: [[-1, 0], [0, 0], [0, 1], [1, 1], [2, 1]] },
+    { name: 'RightNotch', blocks: [[0, 0], [1, 0], [2, 0], [0, 1], [2, 1]] },
+    { name: 'BottomLeftL', blocks: [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2]] },
+    { name: 'BottomRightL', blocks: [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1]] },
     { name: 'Rect', blocks: [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]] }
   ];
 
   const startPositions = [
-    { x: 40, y: 160 },
-    { x: 160, y: 140 },
-    { x: 40, y: 300 },
-    { x: 160, y: 280 },
-    { x: 700, y: 160 },
-    { x: 780, y: 240 },
-    { x: 700, y: 360 },
-    { x: 760, y: 460 }
+    { x: 40, y: 26 },
+    { x: 292, y: 26 },
+    { x: 652, y: 26 },
+    { x: 42, y: 238 },
+    { x: 740, y: 318 },
+    { x: 42, y: 530 },
+    { x: 740, y: 560 },
+    { x: 364, y: 560 }
   ];
 
   const colors = [
@@ -710,16 +710,17 @@ function resetPuzzle() {
 }
 
 function handleSolve() {
-  const confirmed = window.confirm('Show solution and place all pieces?');
-  if (!confirmed) {
-    return;
-  }
+  selectedPiece = null;
+  draggingPiece = null;
+
   const solution = solvePuzzle();
   if (!solution) {
     window.alert('No solution found for this date.');
     return;
   }
+
   applySolution(solution);
+  solvedState = checkSolved();
 }
 
 function handleHint1() {
@@ -907,8 +908,8 @@ function solvePuzzle() {
     return null;
   }
 
-  function canPlace(orientation, origin) {
-    for (const block of orientation.blocks) {
+  function canPlace(blocks, origin) {
+    for (const block of blocks) {
       const row = origin.y + block.y;
       const col = origin.x + block.x;
       const key = cellKey(row, col);
@@ -919,16 +920,16 @@ function solvePuzzle() {
     return true;
   }
 
-  function occupy(orientation, origin) {
-    for (const block of orientation.blocks) {
+  function occupy(blocks, origin) {
+    for (const block of blocks) {
       const row = origin.y + block.y;
       const col = origin.x + block.x;
       occupied.add(cellKey(row, col));
     }
   }
 
-  function release(orientation, origin) {
-    for (const block of orientation.blocks) {
+  function release(blocks, origin) {
+    for (const block of blocks) {
       const row = origin.y + block.y;
       const col = origin.x + block.x;
       occupied.delete(cellKey(row, col));
@@ -949,13 +950,18 @@ function solvePuzzle() {
       }
       const orientations = pieces[i].orientations;
       for (const orientation of orientations) {
-        for (const block of orientation.blocks) {
+        const stateBlocks = getBlocksForState(
+          pieces[i].blocks,
+          orientation.rotation,
+          orientation.flipped
+        );
+        for (const block of stateBlocks) {
           const origin = { x: nextCell.col - block.x, y: nextCell.row - block.y };
-          if (!canPlace(orientation, origin)) {
+          if (!canPlace(stateBlocks, origin)) {
             continue;
           }
           used[i] = true;
-          occupy(orientation, origin);
+          occupy(stateBlocks, origin);
           solution[i] = {
             gridPos: origin,
             rotation: orientation.rotation,
@@ -965,7 +971,7 @@ function solvePuzzle() {
             return true;
           }
           solution[i] = null;
-          release(orientation, origin);
+          release(stateBlocks, origin);
           used[i] = false;
         }
       }
