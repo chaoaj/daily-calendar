@@ -5,7 +5,8 @@ const CANVAS_W = 920;
 const CANVAS_H = 620;
 const TAP_MOVE_THRESHOLD = 12;
 const TAP_MAX_DURATION_MS = 220;
-const SWIPE_FLIP_THRESHOLD = 26;
+const DOUBLE_TAP_MAX_DELAY_MS = 320;
+const DOUBLE_TAP_TARGET_SLOP = 28;
 
 let boardX = 320;
 let boardY = 120;
@@ -33,6 +34,7 @@ let dayCellByNumber = [];
 let activeDate = null;
 let activeDateLabel = '';
 let touchGesture = null;
+let lastTouchTap = null;
 
 let confetti = [];
 let confettiFrames = 0;
@@ -424,7 +426,7 @@ function drawHUD() {
   fill(40);
   textAlign(LEFT, TOP);
   textSize(14);
-  text('Drag pieces. R = rotate, F = flip. Drag off board to remove.', 24, 24);
+  text('Drag pieces. Touch: double-tap left half = rotate, right half = flip. Drag off board to remove.', 24, 24);
   textSize(12);
   text(`Date: ${activeDateLabel}`, 24, 48);
   if (solvedState) {
@@ -628,6 +630,11 @@ function mouseReleased() {
   endDrag();
 }
 
+function getTouchAction(piece, x) {
+  const bounds = getPieceBounds(piece);
+  return x <= (bounds.minX + bounds.maxX) / 2 ? 'rotate' : 'flip';
+}
+
 function touchStarted() {
   const pointer = getPointerPosition();
   const startedDrag = beginDragAt(pointer.x, pointer.y);
@@ -638,11 +645,11 @@ function touchStarted() {
       lastX: pointer.x,
       lastY: pointer.y,
       startTime: Date.now(),
-      flipTriggered: false,
       piece: draggingPiece
     };
   } else {
     touchGesture = null;
+    lastTouchTap = null;
   }
 
   if (startedDrag || isInsideCanvas(pointer.x, pointer.y)) {
@@ -656,17 +663,6 @@ function touchMoved() {
   if (touchGesture && draggingPiece === touchGesture.piece) {
     touchGesture.lastX = pointer.x;
     touchGesture.lastY = pointer.y;
-
-    const deltaX = pointer.x - touchGesture.startX;
-    const deltaY = pointer.y - touchGesture.startY;
-    const horizontalSwipe =
-      Math.abs(deltaX) >= SWIPE_FLIP_THRESHOLD &&
-      Math.abs(deltaX) > Math.abs(deltaY) * 1.4;
-
-    if (!touchGesture.flipTriggered && horizontalSwipe) {
-      flipPieceState(draggingPiece);
-      touchGesture.flipTriggered = true;
-    }
   }
 
   if (dragTo(pointer.x, pointer.y) || isInsideCanvas(pointer.x, pointer.y)) {
@@ -676,26 +672,59 @@ function touchMoved() {
 }
 
 function touchEnded() {
+  const pointer = touchGesture
+    ? { x: touchGesture.lastX, y: touchGesture.lastY }
+    : getPointerPosition();
+
   if (touchGesture && draggingPiece === touchGesture.piece) {
     const totalDeltaX = touchGesture.lastX - touchGesture.startX;
     const totalDeltaY = touchGesture.lastY - touchGesture.startY;
     const movedDistance = Math.hypot(totalDeltaX, totalDeltaY);
     const wasTap =
       movedDistance <= TAP_MOVE_THRESHOLD &&
-      Date.now() - touchGesture.startTime <= TAP_MAX_DURATION_MS &&
-      !touchGesture.flipTriggered;
+      Date.now() - touchGesture.startTime <= TAP_MAX_DURATION_MS;
 
     if (wasTap) {
       const piece = draggingPiece;
-      draggingPiece = null;
-      rotatePieceState(piece, piece.lastPlaced ? piece.lastPlaced.gridPos : null);
+      const action = getTouchAction(piece, touchGesture.lastX);
+      const now = Date.now();
+      const isMatchingDoubleTap =
+        lastTouchTap &&
+        lastTouchTap.piece === piece &&
+        lastTouchTap.action === action &&
+        now - lastTouchTap.time <= DOUBLE_TAP_MAX_DELAY_MS &&
+        Math.hypot(lastTouchTap.x - touchGesture.lastX, lastTouchTap.y - touchGesture.lastY) <= DOUBLE_TAP_TARGET_SLOP;
+
       touchGesture = null;
-      return false;
+
+      if (isMatchingDoubleTap) {
+        draggingPiece = null;
+        if (action === 'rotate') {
+          rotatePieceState(piece, piece.lastPlaced ? piece.lastPlaced.gridPos : null);
+        } else {
+          flipPieceState(piece, piece.lastPlaced ? piece.lastPlaced.gridPos : null);
+        }
+        lastTouchTap = null;
+        return false;
+      }
+
+      lastTouchTap = {
+        piece,
+        action,
+        x: pointer.x,
+        y: pointer.y,
+        time: now
+      };
+    } else {
+      lastTouchTap = null;
     }
+  } else {
+    touchGesture = null;
+    lastTouchTap = null;
   }
 
   touchGesture = null;
-  if (endDrag()) {
+  if (endDrag() || isInsideCanvas(pointer.x, pointer.y)) {
     return false;
   }
   return true;

@@ -1,6 +1,12 @@
 const CELL = 40;
 const COLS = 7;
 const ROWS = 7;
+const CANVAS_W = 920;
+const CANVAS_H = 620;
+const TAP_MOVE_THRESHOLD = 12;
+const TAP_MAX_DURATION_MS = 220;
+const DOUBLE_TAP_MAX_DELAY_MS = 320;
+const DOUBLE_TAP_TARGET_SLOP = 28;
 
 let boardX = 320;
 let boardY = 120;
@@ -27,6 +33,8 @@ let monthCellByIndex = [];
 let dayCellByNumber = [];
 let activeDate = null;
 let activeDateLabel = '';
+let touchGesture = null;
+let lastTouchTap = null;
 
 let confetti = [];
 let confettiFrames = 0;
@@ -50,50 +58,57 @@ const MONTHS = [
 ];
 
 function setup() {
-  createCanvas(920, 620);
+  const canvas = createCanvas(CANVAS_W, CANVAS_H);
+  canvas.parent('app-canvas');
+  canvas.addClass('game-canvas');
   textFont('sans-serif');
   activeDate = new Date();
   initBoard();
   initPieces();
 
   dateLabel = createDiv('Puzzle Date');
-  dateLabel.position(650, 18);
-  dateLabel.style('font-size', '12px');
-  dateLabel.style('font-family', 'sans-serif');
-  dateLabel.style('color', '#4a3523');
+  dateLabel.parent('date-controls');
+  dateLabel.addClass('control-label');
 
   dateModeSelect = createSelect();
-  dateModeSelect.position(650, 42);
+  dateModeSelect.parent('date-controls');
+  dateModeSelect.addClass('control-input');
   dateModeSelect.option('Today', 'today');
   dateModeSelect.option('Custom', 'custom');
   dateModeSelect.selected('today');
   dateModeSelect.changed(handleDateModeChange);
 
   dateInput = createInput(formatDateInputValue(activeDate), 'date');
-  dateInput.position(728, 42);
-  dateInput.size(160);
+  dateInput.parent('date-controls');
+  dateInput.addClass('control-input');
+  dateInput.addClass('date-input');
   dateInput.attribute('max', '9999-12-31');
   dateInput.input(handleDateInputChange);
   dateInput.hide();
 
   resetButton = createButton('Reset');
-  resetButton.position(24, 72);
+  resetButton.parent('action-controls');
+  resetButton.addClass('control-button');
   resetButton.mousePressed(resetPuzzle);
 
   hint1Button = createButton('Hint 1: Orient Pieces');
-  hint1Button.position(90, 72);
+  hint1Button.parent('action-controls');
+  hint1Button.addClass('control-button');
   hint1Button.mousePressed(handleHint1);
 
   hint2Button = createButton('Hint 2: Place 1 Per Window');
-  hint2Button.position(230, 72);
+  hint2Button.parent('action-controls');
+  hint2Button.addClass('control-button');
   hint2Button.mousePressed(handleHint2);
 
   hint3Button = createButton('Hint 3: Place Around Holes');
-  hint3Button.position(430, 72);
+  hint3Button.parent('action-controls');
+  hint3Button.addClass('control-button');
   hint3Button.mousePressed(handleHint3);
 
   solveButton = createButton('Give Up / Solution');
-  solveButton.position(620, 72);
+  solveButton.parent('action-controls');
+  solveButton.addClass('control-button');
   solveButton.mousePressed(handleSolve);
 }
 
@@ -219,14 +234,14 @@ function initPieces() {
   ];
 
   const startPositions = [
-    { x: 40, y: 26 },
-    { x: 292, y: 26 },
+    { x: 24, y: 120 },
+    { x: 24, y: 242 },
     { x: 652, y: 26 },
-    { x: 42, y: 238 },
+    { x: 24, y: 402 },
     { x: 740, y: 318 },
-    { x: 42, y: 530 },
-    { x: 740, y: 560 },
-    { x: 364, y: 560 }
+    { x: 42, y: 480 },
+    { x: 740, y: 500 },
+    { x: 364, y: 500 }
   ];
 
   const colors = [
@@ -411,7 +426,7 @@ function drawHUD() {
   fill(40);
   textAlign(LEFT, TOP);
   textSize(14);
-  text('Drag pieces. R = rotate, F = flip. Drag off board to remove.', 24, 24);
+  text('Drag pieces. Touch: double-tap left half = rotate, right half = flip. Drag off board to remove.', 24, 24);
   textSize(12);
   text(`Date: ${activeDateLabel}`, 24, 48);
   if (solvedState) {
@@ -478,17 +493,33 @@ function getUniqueOrientations(rawBlocks) {
   return orientations;
 }
 
-function mousePressed() {
+function getPointerPosition() {
+  if (typeof touches !== 'undefined' && touches.length > 0) {
+    return { x: touches[0].x, y: touches[0].y };
+  }
+
+  return { x: mouseX, y: mouseY };
+}
+
+function isInsideCanvas(x, y) {
+  return x >= 0 && x <= width && y >= 0 && y <= height;
+}
+
+function beginDragAt(x, y) {
+  if (!isInsideCanvas(x, y)) {
+    return false;
+  }
+
   selectedPiece = null;
   draggingPiece = null;
   for (let i = pieces.length - 1; i >= 0; i--) {
     const piece = pieces[i];
-    if (pieceContains(piece, mouseX, mouseY)) {
+    if (pieceContains(piece, x, y)) {
       selectedPiece = piece;
       draggingPiece = piece;
       dragOffset = {
-        x: mouseX - piece.pos.x,
-        y: mouseY - piece.pos.y
+        x: x - piece.pos.x,
+        y: y - piece.pos.y
       };
 
       pieces.splice(i, 1);
@@ -506,20 +537,25 @@ function mousePressed() {
       break;
     }
   }
+
+  return draggingPiece !== null;
 }
 
-function mouseDragged() {
+function dragTo(x, y) {
   if (!draggingPiece) {
-    return;
+    return false;
   }
-  draggingPiece.pos.x = mouseX - dragOffset.x;
-  draggingPiece.pos.y = mouseY - dragOffset.y;
+
+  draggingPiece.pos.x = x - dragOffset.x;
+  draggingPiece.pos.y = y - dragOffset.y;
+  return true;
 }
 
-function mouseReleased() {
+function endDrag() {
   if (!draggingPiece) {
-    return;
+    return false;
   }
+
   const candidate = getSnappedGridPos(draggingPiece);
   if (candidate && isPlacementValid(draggingPiece, candidate)) {
     placePiece(draggingPiece, candidate);
@@ -533,6 +569,165 @@ function mouseReleased() {
     placePiece(draggingPiece, draggingPiece.lastPlaced.gridPos);
   }
   draggingPiece = null;
+  return true;
+}
+
+function rotatePieceState(piece, preferredGridPos = null) {
+  const prevRotation = piece.rotation;
+  const targetGridPos = piece.placed ? piece.gridPos : preferredGridPos;
+
+  piece.rotation = (piece.rotation + 1) % 4;
+
+  if (!targetGridPos) {
+    return true;
+  }
+
+  if (isPlacementValid(piece, targetGridPos)) {
+    placePiece(piece, targetGridPos);
+    return true;
+  }
+
+  piece.rotation = prevRotation;
+  if (preferredGridPos) {
+    placePiece(piece, preferredGridPos);
+  }
+  return false;
+}
+
+function flipPieceState(piece, preferredGridPos = null) {
+  const prevFlip = piece.flipped;
+  const targetGridPos = piece.placed ? piece.gridPos : preferredGridPos;
+
+  piece.flipped = !piece.flipped;
+
+  if (!targetGridPos) {
+    return true;
+  }
+
+  if (isPlacementValid(piece, targetGridPos)) {
+    placePiece(piece, targetGridPos);
+    return true;
+  }
+
+  piece.flipped = prevFlip;
+  if (preferredGridPos) {
+    placePiece(piece, preferredGridPos);
+  }
+  return false;
+}
+
+function mousePressed() {
+  const pointer = getPointerPosition();
+  beginDragAt(pointer.x, pointer.y);
+}
+
+function mouseDragged() {
+  const pointer = getPointerPosition();
+  dragTo(pointer.x, pointer.y);
+}
+
+function mouseReleased() {
+  endDrag();
+}
+
+function getTouchAction(piece, x) {
+  const bounds = getPieceBounds(piece);
+  return x <= (bounds.minX + bounds.maxX) / 2 ? 'rotate' : 'flip';
+}
+
+function touchStarted() {
+  const pointer = getPointerPosition();
+  const startedDrag = beginDragAt(pointer.x, pointer.y);
+  if (startedDrag) {
+    touchGesture = {
+      startX: pointer.x,
+      startY: pointer.y,
+      lastX: pointer.x,
+      lastY: pointer.y,
+      startTime: Date.now(),
+      piece: draggingPiece
+    };
+  } else {
+    touchGesture = null;
+    lastTouchTap = null;
+  }
+
+  if (startedDrag || isInsideCanvas(pointer.x, pointer.y)) {
+    return false;
+  }
+  return true;
+}
+
+function touchMoved() {
+  const pointer = getPointerPosition();
+  if (touchGesture && draggingPiece === touchGesture.piece) {
+    touchGesture.lastX = pointer.x;
+    touchGesture.lastY = pointer.y;
+  }
+
+  if (dragTo(pointer.x, pointer.y) || isInsideCanvas(pointer.x, pointer.y)) {
+    return false;
+  }
+  return true;
+}
+
+function touchEnded() {
+  const pointer = touchGesture
+    ? { x: touchGesture.lastX, y: touchGesture.lastY }
+    : getPointerPosition();
+
+  if (touchGesture && draggingPiece === touchGesture.piece) {
+    const totalDeltaX = touchGesture.lastX - touchGesture.startX;
+    const totalDeltaY = touchGesture.lastY - touchGesture.startY;
+    const movedDistance = Math.hypot(totalDeltaX, totalDeltaY);
+    const wasTap =
+      movedDistance <= TAP_MOVE_THRESHOLD &&
+      Date.now() - touchGesture.startTime <= TAP_MAX_DURATION_MS;
+
+    if (wasTap) {
+      const piece = draggingPiece;
+      const action = getTouchAction(piece, touchGesture.lastX);
+      const now = Date.now();
+      const isMatchingDoubleTap =
+        lastTouchTap &&
+        lastTouchTap.piece === piece &&
+        lastTouchTap.action === action &&
+        now - lastTouchTap.time <= DOUBLE_TAP_MAX_DELAY_MS &&
+        Math.hypot(lastTouchTap.x - touchGesture.lastX, lastTouchTap.y - touchGesture.lastY) <= DOUBLE_TAP_TARGET_SLOP;
+
+      touchGesture = null;
+
+      if (isMatchingDoubleTap) {
+        draggingPiece = null;
+        if (action === 'rotate') {
+          rotatePieceState(piece, piece.lastPlaced ? piece.lastPlaced.gridPos : null);
+        } else {
+          flipPieceState(piece, piece.lastPlaced ? piece.lastPlaced.gridPos : null);
+        }
+        lastTouchTap = null;
+        return false;
+      }
+
+      lastTouchTap = {
+        piece,
+        action,
+        x: pointer.x,
+        y: pointer.y,
+        time: now
+      };
+    } else {
+      lastTouchTap = null;
+    }
+  } else {
+    touchGesture = null;
+    lastTouchTap = null;
+  }
+
+  touchGesture = null;
+  if (endDrag() || isInsideCanvas(pointer.x, pointer.y)) {
+    return false;
+  }
+  return true;
 }
 
 function pieceContains(piece, x, y) {
@@ -1002,21 +1197,9 @@ function keyPressed() {
     return;
   }
   if (key === 'r' || key === 'R') {
-    const prevRotation = selectedPiece.rotation;
-    selectedPiece.rotation = (selectedPiece.rotation + 1) % 4;
-    if (selectedPiece.placed && !isPlacementValid(selectedPiece, selectedPiece.gridPos)) {
-      selectedPiece.rotation = prevRotation;
-    } else if (selectedPiece.placed) {
-      placePiece(selectedPiece, selectedPiece.gridPos);
-    }
+    rotatePieceState(selectedPiece, selectedPiece.lastPlaced ? selectedPiece.lastPlaced.gridPos : null);
   }
   if (key === 'f' || key === 'F') {
-    const prevFlip = selectedPiece.flipped;
-    selectedPiece.flipped = !selectedPiece.flipped;
-    if (selectedPiece.placed && !isPlacementValid(selectedPiece, selectedPiece.gridPos)) {
-      selectedPiece.flipped = prevFlip;
-    } else if (selectedPiece.placed) {
-      placePiece(selectedPiece, selectedPiece.gridPos);
-    }
+    flipPieceState(selectedPiece, selectedPiece.lastPlaced ? selectedPiece.lastPlaced.gridPos : null);
   }
 }
